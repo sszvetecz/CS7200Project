@@ -1,0 +1,216 @@
+---
+title: "Sim Analysis"
+author: "Sarah Szvetecz"
+date: "2023-12-11"
+output: html_document
+---
+
+read in datasets 
+```{r}
+var_full<-read.csv("/Users/sarahszvetecz/Desktop/R/Chemoproteomics/final_project/derived_data/DMSO_protein_variance_nonzero.csv")
+
+sim_data<-read.csv("/Users/sarahszvetecz/Desktop/R/Chemoproteomics/final_project/derived_data/simulated_dataset_Capmatinib_withCAKI.csv")
+
+```
+
+Select 3 low var and 3 high var proteins
+```{r}
+View(var_full %>% filter(n_zeros <10))
+```
+
+
+
+reformat 
+```{r}
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity 1000nM", "1000nM")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity 100nM", "100nM")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity 10nM", "10nM")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity 30000nM", "30000nM")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity 3000nM", "3000nM")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity 300nM", "300nM")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity 30nM", "30nM")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity 3nM", "3nM")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity DMSO", "DMSO")
+sim_data$Group<-replace(sim_data$Group, sim_data$Group == "LFQ intensity PDPD", "PDPD")
+
+```
+Reformat data 
+```{r}
+#remove LFQ intensity (keep sim only)
+sim_data_sub<-sim_data[,-c(4:5)]
+
+sim_data_long<-melt(sim_data_sub)
+
+#add numeric dose in 
+sim_data_long$dose<-ifelse(sim_data_long$Group == "1000nM",1000,ifelse(
+  sim_data_long$Group == "100nM",100,ifelse(
+  sim_data_long$Group == "10nM",10,ifelse(
+  sim_data_long$Group == "3nM",3,ifelse(
+  sim_data_long$Group == "30nM",30,ifelse(
+  sim_data_long$Group == "300nM",300,ifelse(
+  sim_data_long$Group == "3000nM",3000,ifelse(
+  sim_data_long$Group == "30000nM",30000,ifelse(
+  sim_data_long$Group == "DMSO",1,1)))))
+  )
+)))
+
+#remove PDPD 
+sim_data_long.1 <-sim_data_long[sim_data_long$Group != "PDPD",]
+```
+
+Run for all proteins
+```{r}
+protein_list<-unique(sim_data_long.1$Protein)
+protein_list_sub3<-protein_list[protein_list != c("O00425","O43447")]
+
+parameter_full<-data.frame(matrix(nrow=0,ncol=5))
+colnames(parameter_full)<-c("2.5 %","97.5 %","parameter","parameter_estimate","Protein")
+
+# set up loop  
+for(i in 1:length(protein_list_sub3)){
+  
+example_protein<-sim_data_long.1 %>% filter (Protein == protein_list_sub3[i])
+
+#avg DMSO for scale
+dmso_sub<-example_protein %>% filter(Group == "DMSO")
+dmso_avg<-mean(dmso_sub$value)
+
+#relative log lfq intensity 
+example_protein$LogIntensities_norm<-example_protein$value/dmso_avg
+
+#run model using dr4pl package
+fit_test <- dr4pl(dose = example_protein$dose,
+             response = example_protein$LogIntensities_norm,
+             method.init = "logistic")
+
+#output 
+ci_test<-as.data.frame(confint(fit_test))
+ci_test$parameter<-row.names(ci_test)
+ci_test$parameter_estimate<-fit_test$parameters
+ci_test$Protein<-protein_list_sub3[i]
+
+parameter_full<-rbind(parameter_full,ci_test)
+
+}
+
+nrow(parameter_full)/4
+protein_list_sub3[146]
+```
+Protein O00425 gives errors? not sure why 
+
+MET:  P08581
+SEC16A:O15027
+
+Q8TD08
+```{r}
+#subset to met & capmatinib
+
+var_list_nonzero %>% filter (Protein == "P16591")
+example_protein<-long_protein_groups %>% filter (Protein == "P16591" & Drug == "Capmatinib_withCAKI")
+
+#create simulations 
+
+example_protein$sim1<-NA;example_protein$sim2<-NA;example_protein$sim3<-NA;
+for (i in 1:9){
+example_protein$sim1[i]<-rnorm(1,example_protein$log2_LFQ_Intensity[i],sqrt(34.09318))
+example_protein$sim2[i]<-rnorm(1,example_protein$log2_LFQ_Intensity[i],sqrt(34.09318))
+example_protein$sim3[i]<-rnorm(1,example_protein$log2_LFQ_Intensity[i],sqrt(34.09318))
+}
+
+example_protein$dose<-c(1000,100,10,30000,3000,300,30,3,1,1)
+
+#remove PDPD
+example_protein.1<-example_protein[-10,]
+
+#relative values
+example_protein.1$LogIntensities_norm<-example_protein.1$log2_LFQ_Intensity/ 25.90146
+
+
+#fit single rep data 
+fit_test1 <- dr4pl(dose = example_protein.1$dose,
+             response = example_protein.1$LogIntensities_norm,
+             method.init = "logistic")
+summary(fit_test1)
+
+a<-plot(fit_test1,text.title = "FER: Dose Response (original dataset)",text.x = "Dose (nM)", text.y = "Relative LFQ Intensity")
+
+
+a + aes(ymin = 0)
+
+```
+Repeat with Sim data 
+```{r}
+#remove LFQ intensity (keep sim only)
+example_protein.sim<-example_protein.1[,-c(4,5,9,10)]
+
+example_protein.sim_long<-melt(example_protein.sim)
+
+
+example_protein.sim_long$dose<-rep(c(1000,100,10,30000,3000,300,30,3,1),3)
+
+#relative values
+example_protein.sim_long$LogIntensities_norm<-example_protein.sim_long$value/ 28.55311
+
+
+#fit single rep data 
+fit_test2 <- dr4pl(dose = as.numeric(example_protein.sim_long$dose),
+             response = example_protein.sim_long$LogIntensities_norm,
+             method.init = "logistic")
+summary(fit_test2)
+plot(fit_test2)
+
+plot(fit_test2,text.title = "FER: Dose Response (simulated dataset)",text.x = "Dose (nM)", text.y = "Relative LFQ Intensity") +aes(ymin=0)
+
+b <- plot(fit_test2)
+
+b + aes(ymin = 0)
+
+
+```
+```{r}
+high_var<-summary(fit_test2)
+plot(fit_test2)
+
+high_var_plot<-plot(fit_test2,text.title = "MK15: Dose Response (simulated dataset)",text.x = "Dose (nM)", text.y = "Relative LFQ Intensity")
+
+
+high_var_plot+ aes(ymin = 0)
+```
+
+
+high protiens: Q15056,P20674, Q15758
+```{r}
+# set up loop  
+example_protein<-sim_data_long.1 %>% filter (Protein == "Q15056")
+
+dmso_sub<-example_protein %>% filter(Group == "DMSO")
+dmso_avg<-mean(dmso_sub$value)
+
+
+example_protein$LogIntensities_norm<-example_protein$value/dmso_avg
+
+#run model using dr4pl package
+fit_test<-dr4pl(dose = example_protein$dose,
+             response = example_protein$LogIntensities_norm,
+             method.init = "logistic")
+summary(fit_test)
+
+plot(fit_test,title="Dose Response Plot: Q15056")
+
+
+
+
+
+
+#2 - dr4pl package
+fit_test2.1 <- dr4pl(dose = as.numeric(MET_sim$dose),
+             response = MET_sim$LogIntensities_norm,
+             method.init = "logistic")
+summary(fit_test2.1)
+plot(fit_test2.1)
+ 
+summary(fit_test2);summary(fit_test2.1)
+
+
+```
+

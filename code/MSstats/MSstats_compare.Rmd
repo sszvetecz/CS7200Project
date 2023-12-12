@@ -1,0 +1,554 @@
+---
+title: "Chemoproteomics MSstats comparison"
+author: "Sarah Szvetecz"
+date: "2023-12-01"
+output: html_document
+---
+Load packages
+```{r}
+library(MSstats)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(reshape)
+
+```
+
+Notes: 
+each compound processed as it's own dataset with MaxQuant 
+- data in folders: Capmatinib, Lapatinib, Midostaurin, Rabusertib, and Tanzisertib 
+
+1) Create annotation files 
+  - reference paper
+  - maps ms stats run ... raw file, condition, bioreplciate 
+  - msstats4.0, group comparison, time series, 
+
+2) Run MaxQtoMSstatsFormat converter on each dataset
+  - MaxQtoMSstatsFormat requires evidence and proteinGroups (and annotation?) txt files
+  - manually make annotation file in code 
+  
+Look at data
+```{r}
+summary <- read.table( "/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/Capmatinib/txt/summary.txt",header = TRUE, fill = TRUE, sep = '\t')
+summary <- read_tsv("/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/Capmatinib/txt/summary.txt")
+
+head(summary)
+
+#proteinGroups
+proteinGroups <- read_tsv("/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/Capmatinib/txt/proteinGroups.txt")
+colnames(proteinGroups)
+head(proteinGroups)
+dim(proteinGroups) #3252 x 208
+View(proteinGroups)
+#evidence
+
+evidence <- read_tsv("/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/Capmatinib/txt/evidence.txt")
+
+head(evidence)
+dim(evidence) #298256  x   67
+#take raw files 
+length(unique(evidence$`Raw file`)) #25 runs ; 15 DMSO controls ; 
+
+
+
+#normalization using PDPD and DMSO
+length(unique(evidence$Proteins))
+```
+
+Run for each compound
+```{r}
+#set path
+path<-"/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/"
+compounds<-c("Capmatinib","Lapatinib","Midostaurin","Rabusertib","Tanzisertib")
+
+#create input files 
+input_files<-c()
+for(compound in compounds){
+temp_path_evidence<-paste(path, compound, "/txt/evidence.txt",sep="")
+temp_path_pg<-paste(path, compound, "/txt/proteinGroups.txt",sep="")
+
+#read txt files 
+evidence<-read_tsv(temp_path_evidence)
+proteinGroups<-read_tsv(temp_path_pg)
+
+annot = evidence %>% distinct(`Raw file`, Experiment)
+colnames(annot)[2]<-"Condition"
+annot$BioReplicate = 1
+input = MaxQtoMSstatsFormat(evidence, annot, proteinGroups,)
+
+input_files[[compound]]<-input
+
+}
+
+?MaxQtoMSstatsFormat
+
+
+input_files[[1]]
+compound<-compounds[1]
+cap_evidence<-paste(path, compound, "/txt/evidence.txt",sep="")
+View(read_tsv(cap_evidence))
+cap_evidence<-read_tsv(cap_evidence)
+```
+
+Check variable length (# of proteins and # of peptides) -- 
+```{r}
+length(unique(input_files[[1]]$ProteinName)) #2538
+length(unique(input_files[[1]]$PeptideSequence)) #19799
+
+length(unique(input_files[[2]]$ProteinName)) #2697
+length(unique(input_files[[2]]$PeptideSequence)) #21995
+unique(input_files[[2]]$Condition)
+table(input_files[[2]]$Condition)
+```
+
+Focus on Capmatinib
+Clean data --- remove all run controls c1:c15 
+```{r}
+test_drug1<-input_files[[1]]
+unique(test_drug1$Condition)
+control_remove<-paste("c",1:15,sep="")
+
+#remove run controls (c1:c15) ... we don't use these in the analysis 
+test_drug1_clean<-subset(test_drug1 ,!Condition %in% control_remove)
+unique(test_drug1_clean$Condition)
+
+```
+
+
+Check missing values before dataProccess step 
+```{r}
+#MaxQuant output --- 
+cap_NAsMaxQuant<-cap_evidence %>% filter(is.na(`Max intensity m/z 0`)) 
+length(unique(cap_NAsMaxQuant$`Protein names`))
+#MSstats format --- 
+cap_NAs<-test_drug1_clean %>% filter(is.na(Intensity)) 
+length(unique(cap_NAs$ProteinName)) #2489
+table(cap_NAs$Condition)
+
+```
+
+
+
+Calculate protein level values (compute equalize medians normalization for comparison)
+
+Note: When looking at the data noticed that values are missing at 30000nM (highest concentration)
+  - Checks show that nothing is being filtered out for being "too low" in the dataset ... the values are just not            measured (NA values)
+  
+```{r}
+#default , proper way to run
+QuantData<- dataProcess(test_drug1_clean,normalization = FALSE,MBimpute = FALSE) 
+
+#run to check if proteins are being filtered out 
+QuantData_nofilter<- dataProcess(test_drug1_clean,normalization = FALSE,MBimpute = FALSE,maxQuantileforCensored = NULL) 
+#not being filtered out, just not measured 
+
+dim(QuantData$ProteinLevelData)
+dim(QuantData_nofilter$ProteinLevelData)
+
+sum(is.na(QuantData$ProteinLevelData$LogIntensities))
+sum(is.na(QuantData_nofilter$ProteinLevelData$LogIntensities))
+
+#0 rows shows that no values are being censored
+QuantData_nofilter$FeatureLevelData %>% filter(!is.na(INTENSITY) & censored==TRUE) %>% head()
+QuantData$FeatureLevelData %>% filter(!is.na(INTENSITY) & censored==TRUE) %>% head()
+
+?dataProcess
+#length(unique(QuantData$ProteinLevelData$Protein))
+
+QuantData_norm <- dataProcess(test_drug1_clean,normalization = "EQUALIZEMEDIANS",MBimpute = FALSE) 
+#length(unique(QuantData$ProteinLevelData$Protein))
+```
+Check missing values after dataProccess step 
+```{r}
+#QuantData --- 
+#proteinlevel doesn't show NAs ... all in feature level data 
+QuantData$ProteinLevelData %>% filter(!is.na(LogIntensities) & Protein == "A0AV96") 
+QuantData$ProteinLevelData %>% filter( Protein == "A0AV96") 
+
+
+#count number of missing values 
+sub_protein<-QuantData$FeatureLevelData %>% filter(is.na(INTENSITY) & PROTEIN == "P55263") 
+nrow(sub_protein)
+
+#loop through all --- 
+protien_names<-unique(QuantData$ProteinLevelData$Protein)
+missing_protien_list<-data.frame(matrix(nrow=length(protien_names),ncol=3))
+colnames(missing_protien_list)<-c("Protein","NumberTotal","NumberMissing")
+
+#how much is missing in protein level data ? 
+for (i in 1:length(protien_names)){
+sub_protein<-QuantData$ProteinLevelData %>% filter(Protein == protien_names[i]) 
+missing_protien_list$Protein[i]<-as.character(protien_names[i])
+missing_protien_list$NumberTotal[i]<-nrow(sub_protein)
+missing_protien_list$NumberMissing[i]<- 10 - nrow(sub_protein)
+}
+
+# make histogram 
+ggplot(missing_protien_list, aes(x=NumberMissing)) + 
+  geom_histogram(color="black", fill="white")
+
+# make histogram 
+ggplot(missing_protien_list, aes(x=NumberTotal)) + 
+  geom_histogram(color="black", fill="white")
+
+
+ 
+#calculate number of proteins with at least 1 missing group 
+missing_protien_list %>% filter( NumberTotal != 10) 
+993 / length(protien_names) #2190
+
+
+#set up my data 
+group_missing<-as.data.frame(c("DMSO","PDPD","3nM","10nM","30nM","100nM","300nM","1000nM","3000nM","30000nM","DMSO","PDPD","3nM","10nM","30nM","100nM","300nM","1000nM","3000nM","30000nM"))
+group_missing$Missing<-c(rep("No",10),rep("Yes",10))
+colnames(group_missing)[1]<-"Group"
+
+for (i in 1:10){
+temp_group<-QuantData$ProteinLevelData %>% filter(GROUP == group_missing$Group[i]) 
+group_missing$count[i]<-nrow(temp_group)
+group_missing$count[i+10]<-length(protien_names) - nrow(temp_group)
+}
+
+#percent DMSO missing --- 
+group_missing %>% filter(Group == "DMSO") 
+366 /length(protien_names)
+
+#percent 30000uM missing --- 
+group_missing %>% filter(Group == "30000nM") 
+292 /length(protien_names)
+
+
+# creating plot using the above data
+order<-c("DMSO","PDPD","3nM","10nM","30nM","100nM","300nM","1000nM","3000nM","30000nM")
+ggplot(group_missing, aes(factor(Group,level = order), count, fill = Missing)) +
+  geom_bar(stat="identity", position = "dodge") + 
+  labs(title="Number of missing measurements per group") +xlab("Dose")
+
+
+```
+
+
+```{r}
+#set up loop
+for (i in 1:length(protien_names)){
+sub_protein<-QuantData$FeatureLevelData %>% filter(is.na(INTENSITY) & PROTEIN == protien_names[i]) 
+missing_protien_list$Protein[i]<-as.character(protien_names[i])
+missing_protien_list$NumberMissing[i]<-nrow(sub_protein)
+}
+
+# make histogram 
+ggplot(missing_protien_list, aes(x=NumberMissing)) + 
+  geom_histogram(color="black", fill="white")
+
+#subset to 10 or less 
+ggplot(missing_protien_list %>% filter(NumberMissing < 11), aes(x=NumberMissing)) + 
+  geom_histogram(color="black", fill="white")
+
+
+#########################################
+## Repeat at feature level 
+
+#number missing for each feature 
+peptide_names<-unique(QuantData$FeatureLevelData$PEPTIDE)
+missing_feature_list<-data.frame(matrix(nrow=length(peptide_names),ncol=2))
+colnames(missing_feature_list)<-c("Peptide","NumberMissing")
+
+#set up loop
+for (i in 1:length(peptide_names)){
+sub_peptide<-QuantData$FeatureLevelData %>% filter(is.na(INTENSITY) & PEPTIDE == peptide_names[i])
+missing_feature_list$Peptide[i]<-as.character(peptide_names[i])
+missing_feature_list$NumberMissing[i]<-nrow(sub_peptide)
+}
+
+
+# make histogram 
+ggplot(missing_feature_list, aes(x=NumberMissing)) + 
+  geom_histogram(color="black", fill="white")
+
+
+```
+
+
+Calculate Percent depletion for each protein 
+```{r}
+sub_DMSO<-QuantData$ProteinLevelData %>% filter(GROUP == "DMSO") 
+protein_sub<-unique(sub_DMSO$Protein)
+
+#test 
+sub_DMSO_temp<-QuantData$ProteinLevelData %>% filter(GROUP == "DMSO" & Protein == protein_sub[1]) 
+sub_other_temp<-QuantData$ProteinLevelData %>% filter( Protein == protein_sub[1]) 
+
+temp_data<-as.data.frame(sub_other_temp$GROUP)
+temp_data$relative_intensity<- sub_other_temp$LogIntensities / sub_DMSO_temp$LogIntensities
+temp_data$Protein<-as.character(protein_sub[1])
+
+temp_data_update<-rbind(temp_data_update,temp_data)
+
+
+#loop 
+temp_data_update<-as.data.frame(matrix(ncol=3))
+colnames(temp_data_update)<-c("Group","relative_intensity","Protein")
+for (i in 1: length(protein_sub)){
+sub_DMSO_temp<-QuantData$ProteinLevelData %>% filter(GROUP == "DMSO" & Protein == protein_sub[i]) 
+sub_other_temp<-QuantData$ProteinLevelData %>% filter( Protein == protein_sub[i]) 
+
+temp_data<-as.data.frame(sub_other_temp$GROUP)
+temp_data$relative_intensity<- sub_other_temp$LogIntensities / sub_DMSO_temp$LogIntensities
+temp_data$Protein<-as.character(protein_sub[i])
+colnames(temp_data)[1]<-"Group"
+
+temp_data_update<-rbind(temp_data_update,temp_data)
+}
+
+
+View(temp_data_update)
+```
+
+
+Variance calculation 
+```{r}
+protien_names<-unique(QuantData$ProteinLevelData$Protein)
+
+protein_var_list<-data.frame(matrix(nrow=length(protien_names),ncol=2))
+#protein_var_list<-as.data.frame(protein_var_list)
+colnames(protein_var_list)<-c("Protein","Variance")
+
+#set up loop
+for (i in 1:length(protien_names)){
+sub_protein<-QuantData$ProteinLevelData[QuantData$ProteinLevelData$GROUP %in% c("DMSO","PDPD")& QuantData$ProteinLevelData$Protein %in% protien_names[i],]
+
+protein_var_list$Protein[i]<-as.character(protien_names[i])
+protein_var_list$Variance[i]<-var(sub_protein$LogIntensities)
+}
+
+#protein_var_list$Protein[1]<-as.character(protien_names[1])
+protein_var_list
+summary(protein_var_list$Variance)
+546/nrow(protein_var_list)
+```
+
+
+
+
+Set up contrast matrix --- 
+Comparison with no groupings (no reps)
+```{r}
+## set up comparison DMSO vs highest dose , and  DMSO  vs PDPD
+comparison1<-matrix(c(0,1,0,0,0,0,0,0,0,-1),nrow=1)
+comparison2<-matrix(c(0,0,0,0,0,0,0,0,1,-1),nrow=1)
+comparison<-rbind(comparison1,comparison2)
+row.names(comparison)<-c("DMSO-30000nM","DMSO-PDPD")
+colnames(comparison)<-unique(QuantData$ProteinLevelData$GROUP)
+
+
+testResultMultiComparisons<-groupComparison(contrast.matrix=comparison,data=QuantData)
+View(testResultMultiComparisons$ComparisonResult) #can only look at logFC when 1 rep in each group 
+```
+check DMSO vs PDPD
+```{r}
+summary(testResultMultiComparisons$ComparisonResult[testResultMultiComparisons$ComparisonResult$Label == "DMSO-PDPD","log2FC"])
+
+hist(testResultMultiComparisons$ComparisonResult[testResultMultiComparisons$ComparisonResult$Label == "DMSO-PDPD","log2FC"])
+```
+check DMSO vs 30000nM
+```{r}
+summary(testResultMultiComparisons$ComparisonResult[testResultMultiComparisons$ComparisonResult$Label == "DMSO-30000nM","log2FC"])
+
+
+hist(testResultMultiComparisons$ComparisonResult[testResultMultiComparisons$ComparisonResult$Label == "DMSO-30000nM","log2FC"])
+
+```
+
+
+Set up contrast matrix --- 
+rename columns to be same to group conditions together
+*subject = rep 
+```{r}
+#create new QuantData for grouping samples together 
+QuantData_groups<-QuantData
+
+#rename in FeatureData
+#PDPD to DMSO ---
+levels(QuantData_groups$FeatureLevelData$SUBJECT)<-c(1,2)
+
+#define as replicate
+QuantData_groups$FeatureLevelData[which(QuantData_groups$FeatureLevelData$GROUP=="PDPD"),]$SUBJECT <- 2
+table(QuantData_groups$FeatureLevelData$SUBJECT)
+
+QuantData_groups$FeatureLevelData[which(QuantData_groups$FeatureLevelData$GROUP=="PDPD"),]$GROUP <- "DMSO"
+table(QuantData_groups$FeatureLevelData$GROUP)
+
+#3000nM to 30000nM ---
+QuantData_groups$FeatureLevelData[which(QuantData_groups$FeatureLevelData$GROUP=="3000nM"),]$SUBJECT <- 2
+table(QuantData_groups$FeatureLevelData$SUBJECT)
+
+QuantData_groups$FeatureLevelData[which(QuantData_groups$FeatureLevelData$GROUP=="3000nM"),]$GROUP <- "30000nM"
+table(QuantData_groups$FeatureLevelData$GROUP)
+
+
+#rename in ProteinData
+QuantData_groups$ProteinLevelData[which(QuantData_groups$ProteinLevelData$GROUP=="PDPD"),]$SUBJECT <- 2
+table(QuantData_groups$ProteinLevelData$SUBJECT)
+
+QuantData_groups$ProteinLevelData[which(QuantData_groups$ProteinLevelData$GROUP=="PDPD"),]$GROUP <- "DMSO"
+table(QuantData_groups$ProteinLevelData$GROUP)
+
+#3000nM to 30000nM ---
+QuantData_groups$ProteinLevelData[which(QuantData_groups$ProteinLevelData$GROUP=="3000nM"),]$SUBJECT <- 2
+table(QuantData_groups$ProteinLevelData$SUBJECT)
+
+QuantData_groups$ProteinLevelData[which(QuantData_groups$ProteinLevelData$GROUP=="3000nM"),]$GROUP <- "30000nM"
+table(QuantData_groups$ProteinLevelData$GROUP)
+
+
+## set up comparison DMSO vs highest dose , and top 2 high vs top 2 low
+comparison1<-matrix(c(0,1,0,-1,0,0,0,0),nrow=1)
+#comparison2<-matrix(c(0,1,0,0,0,0,0,0,0,-1),nrow=1)
+#comparison3<-matrix(c(-1,0,0,0,0,0,0,0,1,0),nrow=1)
+#comparison<-rbind(comparison1,comparison2)
+#row.names(comparison)<-c("DMSO_PDPD-30000nM_3000nM","DMSO-30000nM")
+#colnames(comparison)<-unique(QuantData_groups$ProteinLevelData$GROUP)
+row.names(comparison1)<-c("DMSO_PDPD-30000nM_3000nM")
+comparison1<-data.frame(comparison1)
+colnames(comparison1)<-unique(QuantData_groups$ProteinLevelData$GROUP)
+
+
+testResultMultiComparisons_groups<-groupComparison(contrast.matrix=comparison1,data=QuantData_groups)
+
+View(testResultMultiComparisons_groups$ComparisonResult)
+```
+
+
+Next test 
+```{r}
+#create test comparison ... less missing data? No difference here, still NAs
+comparisontest<-matrix(c(0,0,0,0,0,0,0,0,1,-1),nrow=1)
+#comparison<-rbind(comparison1,comparison2)
+row.names(comparisontest)<-c("DMSO-30nM")
+colnames(comparisontest)<-unique(QuantData$ProteinLevelData$GROUP)
+
+testResultMultiComparisons.test<-groupComparison(contrast.matrix=comparisontest,data=QuantData)
+
+testResultMultiComparisons;testResultMultiComparisons.test
+```
+
+Comparison using normalized data ---
+```{r}
+QuantData_norm
+
+## set up comparison DMSO vs highest dose , and top 2 high vs top 2 low
+comparison1<-matrix(c(0,1,0,-1,0,0,1,0,0,-1),nrow=1)
+comparison2<-matrix(c(0,1,0,0,0,0,0,0,0,-1),nrow=1)
+#comparison3<-matrix(c(-1,0,0,0,0,0,0,0,1,0),nrow=1)
+comparison_temp<-rbind(comparison1,comparison2)
+row.names(comparison_temp)<-c("DMSO_PDPD-30000nM_3000nM","DMSO-30000nM")
+colnames(comparison_temp)<-unique(QuantData_norm$ProteinLevelData$GROUP)
+
+testResultMultiComparisons_temp<-groupComparison(contrast.matrix=comparison_temp,data=QuantData_norm)
+
+```
+
+
+Visualize the log intensisties for a single protein ---- 
+```{r}
+test_CDKL<-subset(QuantData[[2]],Protein %in% c("O76039"))
+
+test_Q6ZTR7<-subset(QuantData[[2]],Protein %in% c("Q6ZTR7"))
+
+test_O15197<-subset(QuantData[[2]],Protein %in% c("O15197"))
+
+test_Q9UI12<-subset(QuantData[[2]],Protein %in% c("Q9UI12"))
+
+#define order
+order<-c("DMSO","PDPD","3nM","10nM","30nM","100nM","300nM","1000nM","3000nM","30000nM")
+
+test_CDKL<-test_CDKL[order(factor(test_CDKL$GROUP, levels = order)),]
+
+test_CDK4<-test_CDK4[order(factor(test_CDK4$GROUP, levels = order)),]
+
+#remove PDPD
+`%notin%` <- Negate(`%in%`)
+test_CDK4<-subset(test_CDK4,GROUP %notin% c("PDPD"))
+
+#visualize points for 1 protein 
+ggplot(test_Q9UI12,aes(x=factor(GROUP, level = order),y=LogIntensities))+geom_boxplot() + ggtitle(paste0("Test data for Protein: ", test_Q9UI12$Protein[1]))+xlab("Drug Concentration")+ylab("Log Intensity")
+
+ggplot(test_Q9H0U3,aes(x=factor(GROUP, level = order),y=LogIntensities))+geom_boxplot() + ggtitle(paste0("Test data for Protein: MAGT1"))+xlab("Drug Concentration")+ylab("Log Intensity")
+
+ggplot(test_Q9H0U3,aes(x=factor(GROUP, level = order),y=LogIntensities/20.33898))+geom_boxplot() + ggtitle(paste0("Test data for Protein: ", test_Q9H0U3$Protein[1]))+xlab("Drug Concentration")+ylab("Log Intensity relative to DMSO")
+```
+
+
+```{r}
+add_ratios <- function(df, cols, ratio_cols, ref_cols) {
+  # Calculate ratios of cols / mean(ref_cols)
+  df[ratio_cols] <- df[cols] / rowMeans(df[ref_cols, drop = FALSE])
+  
+  # Replace infinity values with NA
+  df[ratio_cols][is.infinite(df[ratio_cols])] <- NA
+  
+  return(df)
+}
+```
+
+Only works for single comparison
+```{r}
+# Function: groupComparisonPlots
+# visualization for testing results
+
+# Volcano plot with FDR cutoff = 0.05 and no FC cutoff
+groupComparisonPlots(data=testResultMultiComparisons_groups$ComparisonResult %>% filter( !is.na(pvalue)),type="VolcanoPlot",logBase.pvalue=2,sig = 0.5,address="Ex1_")
+
+
+
+?groupComparisonPlots
+# Volcano plot with FDR cutoff = 0.05, FC cutoff = 70, upper y-axis limit = 100, and no protein name displayed
+# FCcutoff=70 is for demonstration purpose
+groupComparisonPlots(data=testResultMultiComparisons$ComparisonResult,type="VolcanoPlot",FCcutoff=70, logBase.pvalue=2, ylimUp=100, ProteinName=FALSE,address="Ex2_")
+```
+
+Visualizations 
+```{r}
+# 1. Profile plot
+dataProcessPlots(data=QuantData,type="ProfilePlot",width=20, height=10)
+
+# 2. Quality control plot 
+dataProcessPlots(data=QuantData,type="QCPlot")	
+
+# 3. Quantification plot for conditions
+dataProcessPlots(data=QuantData,type="ConditionPlot")
+
+```
+
+These won't work when doing a single comparison:
+```{r}
+# Heatmap with FDR cutoff = 0.05
+groupComparisonPlots(data=testResultMultiComparisons$ComparisonResult,type="Heatmap", logBase.pvalue=2, address="Ex1_")
+
+# Heatmap with FDR cutoff = 0.05 and FC cutoff = 70
+# FCcutoff=70 is for demonstration purpose
+groupComparisonPlots(data=testResultMultiComparisons$ComparisonResult,type="Heatmap",FCcutoff=70, logBase.pvalue=2, address="Ex2_")
+
+# Comparison Plot
+groupComparisonPlots(data=testResultMultiComparisons$ComparisonResult,type="ComparisonPlot",address="Ex1_")
+
+# Comparison Plot
+groupComparisonPlots(data=testResultMultiComparisons$ComparisonResult,type="ComparisonPlot",ylimUp=8,ylimDown=-1,address="Ex2_")
+```
+
+Extra (haven't run) ----- 
+
+Sample size & power calculation 
+```{r}
+## Calculate sample size for future experiments:
+#(1) Minimal number of biological replicates per condition
+designSampleSize(data=testResultMultiComparisons$FittedModel, numSample=TRUE,
+                 desiredFC=c(1.25,1.75), FDR=0.05, power=0.8)
+
+#(2) Power calculation
+designSampleSize(data=testResultMultiComparisons$FittedModel, numSample=2,
+                 desiredFC=c(1.25,1.75), FDR=0.05, power=TRUE)
+
+```
+
+

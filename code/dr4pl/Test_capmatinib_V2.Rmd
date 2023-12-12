@@ -1,0 +1,361 @@
+---
+title: "Test from ProtienGroups.txt (using Raw_Intensity values)"
+author: "Sarah Szvetecz"
+date: "2023-12-07"
+output: html_document
+---
+
+Load packages
+```{r}
+library(MSstats)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(reshape)
+library(reshape2)
+```
+
+Read combined ProteinGroups
+```{r}
+proteinGroups_combined <- read_tsv("/Users/sarahszvetecz/Downloads/ProteinGroups_combined.txt")
+
+colnames(proteinGroups_combined)
+View(proteinGroups_combined)
+colnames(proteinGroups_combined)
+columns_keep<-colnames(proteinGroups_combined)[c(1:2,150:157,173,174)]
+
+proteinGroups_combined<-proteinGroups_combined[,colnames(proteinGroups_combined) %in% columns_keep]
+
+#subset to MET 
+MET_raw_intensity<-proteinGroups_combined %>% filter (`Protein IDs` == "P08581")
+```
+
+Change to long format 
+```{r}
+long_MET_raw_intensity<-melt(MET_raw_intensity)
+colnames(long_MET_raw_intensity)[2:4]<-c("Protein","Group","Raw_Intensity")
+```
+
+
+Variance calculation 
+```{r}
+#log2 transform values 
+long_MET_raw_intensity$log2_Intensity<-log2(long_MET_raw_intensity$Raw_Intensity + 1)
+
+protein_var_MET<-data.frame(matrix(nrow=1,ncol=3))
+colnames(protein_var_MET)<-c("Group","Protein","Variance")
+
+
+long_MET_raw_intensity_clean<-long_MET_raw_intensity %>% filter(Group == groups[9] & log2_Intensity != 0)   
+```
+
+
+
+ignore this chunk (lines 56 - 86) -- 
+
+```{r eval=FALSE, include=FALSE}
+#set up data for loop 
+groups<-unique(long_MET_raw_intensity$Group)
+
+
+protein_var_MET<-data.frame(matrix(nrow=10,ncol=3))
+colnames(protein_var_MET)<-c("Group","Protein","Variance")
+
+
+#set up loop
+
+for ( j in 1:length(groups)){
+
+sub_protein<-long_MET_raw_intensity %>% filter(Group == groups[j] & Protein == "P08581")
+
+protein_var_MET$Protein[j]<-as.character("P08581")
+protein_var_MET$Group[j]<-as.character(groups[j])
+protein_var_MET$Variance[j]<-var(sub_protein$log2_Intensity)
+
+}
+
+
+#protein_var_list_firstRun<-protein_var_list
+
+
+#Visualize variance 
+ggplot(protein_var_list, aes(x=Group, y=Variance, color=Group)) +
+  geom_boxplot() +
+  labs(title="Variance distribution across all proteins",x="Concentration", y = "Variance")+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+
+long_MET_raw_intensity
+protein_var_MET
+```{r}
+example_met_v2<-long_MET_raw_intensity %>% filter (Protein == "P08581" & Drug == "Capmatinib_withCAKI")
+
+example_met_v2$dose<-c(1000,100,10,30000,3000,300,30,3,1,1)
+
+#remove PDPD
+example_met_v2<-example_met_v2[-10,]
+
+#relative values
+example_met_v2$LogIntensities_norm<-example_met_v2$log2_Intensity/21.92136
+
+
+#create simulations ----
+
+#variance calculation 
+var(long_MET_raw_intensity_clean$log2_Intensity)
+
+example_met_v2$sim1<-NA;example_met_v2$sim2<-NA;example_met_v2$sim3<-NA;
+for (i in 1:9){
+example_met_v2$sim1[i]<-rnorm(1,example_met_v2$log2_Intensity[i],sqrt(3.29868))
+example_met_v2$sim2[i]<-rnorm(1,example_met_v2$log2_Intensity[i],sqrt(3.29868))
+example_met_v2$sim3[i]<-rnorm(1,example_met_v2$log2_Intensity[i],sqrt(3.29868))
+
+}
+
+
+#create new dataset 
+example_met_v2$Group<-c("1000nM","100nM","10nM","30000nM","3000nM","300nM","30nM","3nM","DMSO")
+MET_sim_v2<- data.frame(cbind(rep(example_met_v2$Group,3),rep(example_met_v2$dose,3)))
+MET_sim_v2$log2_Intensity<-NA
+MET_sim_v2$log2_Intensity[1:9]<-example_met_v2$sim3[1:9]
+MET_sim_v2$log2_Intensity[10:18]<-example_met_v2$sim1[1:9]
+MET_sim_v2$log2_Intensity[19:27]<-example_met_v2$sim2[1:9]
+
+colnames(MET_sim_v2)[1:2]<-c("Concentration","dose")
+MET_sim_v2$LogIntensities_norm<-MET_sim_v2$log2_Intensity/21.92136
+
+#visualize data 
+order<-c("DMSO","3nM","10nM","30nM","100nM","300nM","1000nM","3000nM","30000nM")
+
+ggplot(MET_sim_v2, aes(x=factor(Concentration, level = order), y=log2_Intensity)) +
+  geom_boxplot( show.legend = FALSE) +
+  labs(title="Simulated Replicates for MET", y = "log2_LFQ_Intensity")
+
+#relative to DMSO 
+ggplot(MET_sim_v2, aes(x=factor(Concentration, level = order), y=LogIntensities_norm)) +
+  geom_boxplot( show.legend = FALSE) +
+  labs(title="Simulated Replicates for MET", y = "Relative Intensity")
+
+```
+
+```{r}
+#1- drc package 
+fit_test1_v2<-drm(LogIntensities_norm ~ dose,data=example_met_v2,  fct = LL.4())
+summary(fit_test1_v2)
+plot(fit_test1_v2,ylim=c(0,1.4))
+
+#2 - dr4pl package
+fit_test2_v2 <- dr4pl(dose = example_met_v2$dose,
+             response = example_met_v2$LogIntensities_norm,
+             method.init = "logistic")
+summary(fit_test2_v2)
+plot(fit_test2_v2)
+ plot(fit_test2_v2,text.title = "MET: Dose Response (original dataset)",text.x = "Dose (nM)", text.y = "Relative LFQ Intensity")
+
+
+#use simulated data 
+#MET_sim_v2
+  
+#1- drc package 
+fit_test1.1_v2<-drm(LogIntensities_norm ~ as.numeric(dose),data=MET_sim_v2,  fct = LL.4())
+summary(fit_test1.1_v2)
+plot(fit_test1.1_v2,ylim=c(0,1.4))
+
+#2 - dr4pl package
+fit_test2.1_v2<- dr4pl(dose = as.numeric(MET_sim_v2$dose),
+             response = MET_sim_v2$LogIntensities_norm,
+             method.init = "logistic")
+summary(fit_test2.1_v2)
+plot(fit_test2.1_v2)
+ 
+ plot(fit_test2.1_v2,text.title = "MET: Dose Response (simulated dataset)",text.x = "Dose (nM)", text.y = "Relative LFQ Intensity")
+
+summary(fit_test2_v2);summary(fit_test2.1_v2)
+
+gof(fit_test2.1_v2)
+gof(fit_test2_v2)
+
+qqplot(residuals(fit_test2.1_v2))
+
+qqnorm(residuals(fit_test2.1_v2), pch=1, frame=FALSE)
+qqline(residuals(fit_test2.1_v2), col="steelblue", lwd=2)
+```
+
+
+
+
+
+EXTRA scratch code  -----
+
+
+
+Repeat for just DMSO with filter out all 0s 
+```{r}
+
+test1<-long_protein_groups %>% filter(Group == groups[9] & Protein == protien_names_sub[1])
+test1 %>% filter(log2_LFQ_Intensity != 0 )
+
+var_list_nonzero<-data.frame(matrix(nrow=length(protien_names_sub),ncol=3))
+colnames(var_list_nonzero)<-c("Protein","Variance","n_zeros")
+
+for (i in 1:length(protien_names_sub)){
+    
+temp_sub1<-long_protein_groups %>% filter(Protein == protien_names_sub[i] & Group == groups[9])
+temp_sub2<-temp_sub1 %>% filter(log2_LFQ_Intensity != 0 )
+
+var_list_nonzero$Protein[i]<-as.character(protien_names_sub[i])
+var_list_nonzero$Variance[i]<-var(temp_sub2$log2_LFQ_Intensity)
+var_list_nonzero$n_zeros[i]<-19 -nrow(temp_sub2)
+
+}
+
+summary(var_list_nonzero)
+#Visualize variance 
+ggplot(var_list_nonzero, aes(x=as.factor(n_zeros), y=Variance, color=as.factor(n_zeros))) +
+  geom_boxplot( show.legend = FALSE) +
+  labs(title="DMSO variance distribution stratified by numbers of zeros",x="Number of drugs with zero DMSO", y = "Variance")
+
+```
+```{r}
+var_list_nonzero_sub<-var_list_nonzero[,-3]
+var_list_nonzero_sub<-cbind(rep("DMSO_filterd",2841),var_list_nonzero_sub)
+colnames(var_list_nonzero_sub)[1]<-"Group"
+
+#combine values 
+protein_var_list_new<-protein_var_list
+protein_var_list[]
+groups
+
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity 1000nM", "1000nM")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity 100nM", "100nM")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity 10nM", "10nM")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity 30000nM", "30000nM")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity 3000nM", "3000nM")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity 300nM", "300nM")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity 30nM", "30nM")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity 3nM", "3nM")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity DMSO", "DMSO")
+protein_var_list$Group<-replace(protein_var_list$Group, protein_var_list$Group == "LFQ intensity PDPD", "PDPD")
+
+protein_var_list_new1<-rbind(protein_var_list,var_list_nonzero_sub)
+
+
+#Visualize variance 
+ggplot(protein_var_list_new1, aes(x=Group, y=Variance, color=Group)) +
+  geom_boxplot() +
+  labs(title="Variance distribution across all proteins",x="Concentration", y = "Variance")+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+subset to met 
+```{r}
+
+nomissing<-var_list_nonzero %>% filter (n_zeros == 0)
+summary(nomissing$Variance)
+
+rnorm(1,21.91831,sqrt(29) )
+rnorm(1,0,sqrt(29) )
+
+rnorm(1,0,sqrt(2.072768) )
+
+
+var_list_nonzero %>% filter (Protein == "P08581")
+example_met<-long_protein_groups %>% filter (Protein == "P08581" & Drug == "Capmatinib_withCAKI")
+
+#create simulations 
+
+example_met$sim1<-NA;example_met$sim2<-NA;example_met$sim3<-NA;
+for (i in 1:9){
+example_met$sim1[i]<-rnorm(1,example_met$log2_LFQ_Intensity[i],sqrt(2.072768))
+example_met$sim2[i]<-rnorm(1,example_met$log2_LFQ_Intensity[i],sqrt(2.072768))
+example_met$sim3[i]<-rnorm(1,example_met$log2_LFQ_Intensity[i],sqrt(2.072768))
+
+}
+
+
+#create new dataset 
+example_met$Group<-c("1000nM","100nM","10nM","30000nM","3000nM","300nM","30nM","3nM","DMSO")
+MET_sim<- data.frame(cbind(rep(example_met$Group,3),rep(example_met$dose,3)))
+MET_sim$log2_LFQ_Intensity<-NA
+MET_sim$log2_LFQ_Intensity[1:9]<-example_met$sim3[1:9]
+MET_sim$log2_LFQ_Intensity[10:18]<-example_met$sim1[1:9]
+MET_sim$log2_LFQ_Intensity[19:27]<-example_met$sim2[1:9]
+
+colnames(MET_sim)[1:2]<-c("Concentration","dose")
+MET_sim$LogIntensities_norm<-MET_sim$log2_LFQ_Intensity/21.9183075
+
+#visualize data 
+order<-c("DMSO","3nM","10nM","30nM","100nM","300nM","1000nM","3000nM","30000nM")
+
+ggplot(MET_sim, aes(x=factor(Concentration, level = order), y=log2_LFQ_Intensity)) +
+  geom_boxplot( show.legend = FALSE) +
+  labs(title="Simulated Replicates for MET", y = "log2_LFQ_Intensity")
+
+#relative to DMSO 
+ggplot(MET_sim, aes(x=factor(Concentration, level = order), y=LogIntensities_norm)) +
+  geom_boxplot( show.legend = FALSE) +
+  labs(title="Simulated Replicates for MET", y = "Relative Intensity")
+
+```
+
+
+Subset to MET 
+```{r}
+protein_var_list %>% filter (Protein == "P08581")
+example_met<-long_protein_groups %>% filter (Protein == "P08581" & Drug == "Capmatinib_withCAKI")
+
+
+example_met$dose<-c(1000,100,10,30000,3000,300,30,3,1,1)
+
+#remove PDPD
+example_met<-example_met[-10,]
+
+#relative values
+example_met$LogIntensities_norm<-example_met$log2_LFQ_Intensity/21.91831
+
+
+#1- drc package 
+fit_test1<-drm(LogIntensities_norm ~ dose,data=example_met,  fct = LL.4())
+summary(fit_test1)
+plot(fit_test1,ylim=c(0,1.4))
+
+#2 - dr4pl package
+fit_test2 <- dr4pl(dose = example_met$dose,
+             response = example_met$LogIntensities_norm,
+             method.init = "logistic")
+summary(fit_test2)
+plot(fit_test2)
+  
+
+#use simulated data 
+MET_sim
+  
+#1- drc package 
+fit_test1.1<-drm(LogIntensities_norm ~ as.numeric(dose),data=MET_sim,  fct = LL.4())
+summary(fit_test1.1)
+plot(fit_test1.1,ylim=c(0,1.4))
+
+#2 - dr4pl package
+fit_test2.1 <- dr4pl(dose = as.numeric(MET_sim$dose),
+             response = MET_sim$LogIntensities_norm,
+             method.init = "logistic")
+summary(fit_test2.1)
+plot(fit_test2.1)
+ 
+summary(fit_test2);summary(fit_test2.1)
+
+gof(fit_test2.1)
+gof(fit_test2)
+
+```
+  
+ 
+
+```{r}
+dr4pl_theta()
+```
+
+
+
+

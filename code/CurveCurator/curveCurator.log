@@ -1,0 +1,12 @@
+2023-11-13 18:08:26,345 - INFO -  * Executing CurveCurator pipeline version 0.3.0.
+2023-11-13 18:08:26,345 - INFO -  * Reading parameter file of experiment.
+2023-11-13 18:08:26,387 - INFO -  * Loading data file Z:\internal_projects\active\TOPAS\Publications\DecryptM_Finder\Data\Kinobeads\individual_Drugs\Capmatinib_Sarah\./combined/txt/proteinGroups.txt.
+2023-11-13 18:08:26,933 - INFO -  * 1560 Curves were removed because of >7 missing values.
+2023-11-13 18:08:27,038 - INFO -  * Fit will use interpolation X values:
+2023-11-13 18:08:27,038 - INFO - [-8.52, -8.26, -8.0, -7.76, -7.52, -7.26, -7.0, -6.76, -6.52, -6.26, -6.0, -5.76, -5.52, -5.27, -5.02, -4.77, -4.52]
+2023-11-13 18:08:27,045 - INFO -  * Fitting curves parameters by standard OLS with 2 cores:
+2023-11-13 18:09:07,762 - INFO -  * Fitting curves parameters done !
+2023-11-13 18:09:07,778 - INFO -  * Calculate Relevance Score and apply SAM user thresholds:
+2023-11-13 18:09:07,778 - INFO -    alpha=0.1, fc_lim=0.5, s0=0.2709
+2023-11-13 18:09:07,919 - INFO -  * Rendering interactive dashboard using webgl backend ...
+2023-11-13 18:09:08,836 - INFO -  * Dashboard successfully rendered.

@@ -1,0 +1,462 @@
+---
+title: "Data Processing / Explore"
+author: "Sarah Szvetecz"
+date: "2023-10-03"
+output: html_document
+---
+
+Load packages
+```{r}
+library(MSstats)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(reshape)
+
+#packages for curve fitting 
+library(drc)
+library(plotrix)
+library(dr4pl)
+```
+
+Notes: 
+each compound processed as it's own dataset with MaxQuant 
+- data in folders: Capmatinib, Lapatinib, Midostaurin, Rabusertib, and Tanzisertib 
+
+1) Create annotation files 
+  - reference paper
+  - maps ms stats run ... raw file, condition, bioreplciate 
+  - msstats4.0, group comparison, time series, 
+
+2) Run MaxQtoMSstatsFormat converter on each dataset
+  - MaxQtoMSstatsFormat requires evidence and proteinGroups (and annotation?) txt files
+  
+Look at data
+```{r}
+summary <- read.table( "/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/Capmatinib/txt/summary.txt",header = TRUE, fill = TRUE, sep = '\t')
+summary <- read_tsv("/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/Capmatinib/txt/summary.txt")
+
+head(summary)
+
+#proteinGroups
+proteinGroups <- read_tsv("/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/Capmatinib/txt/proteinGroups.txt")
+colnames(proteinGroups)
+head(proteinGroups)
+dim(proteinGroups) #3252 x 208
+
+#evidence
+
+evidence <- read_tsv("/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/Capmatinib/txt/evidence.txt")
+
+head(evidence)
+dim(evidence) #298256  x   67
+#take raw files 
+length(unique(evidence$`Raw file`)) #25 runs ; 15 DMSO controls ; 
+
+annot
+
+
+#normalization using PDPD and DMSO
+length(unique(evidence$Proteins))
+```
+
+Run for each compound
+```{r}
+#set path
+path<-"/Users/sarahszvetecz/Desktop/R/Chemoproteomics/klaeger_etal_science/"
+compounds<-c("Capmatinib","Lapatinib","Midostaurin","Rabusertib","Tanzisertib")
+
+#create input files 
+input_files<-c()
+for(compound in compounds){
+temp_path_evidence<-paste(path, compound, "/txt/evidence.txt",sep="")
+temp_path_pg<-paste(path, compound, "/txt/proteinGroups.txt",sep="")
+
+#read txt files 
+evidence<-read_tsv(temp_path_evidence)
+proteinGroups<-read_tsv(temp_path_pg)
+
+annot = evidence %>% distinct(`Raw file`, Experiment)
+colnames(annot)[2]<-"Condition"
+annot$BioReplicate = 1
+input = MaxQtoMSstatsFormat(evidence, annot, proteinGroups)
+
+input_files[[compound]]<-input
+
+}
+
+
+input_files[[1]]
+compound<-compounds[1]
+cap_evidence<-paste(path, compound, "/txt/evidence.txt",sep="")
+View(read_tsv(cap_evidence))
+```
+
+Check  variables  
+```{r}
+length(unique(input_files[[1]]$ProteinName)) #2538
+length(unique(input_files[[1]]$PeptideSequence)) #19799
+
+length(unique(input_files[[2]]$ProteinName)) #2697
+length(unique(input_files[[2]]$PeptideSequence)) #21995
+unique(input_files[[2]]$Condition)
+table(input_files[[2]]$Condition)
+```
+
+Convert to protein level values for Capmatinib
+```{r}
+test_drug1<-input_files[[1]]
+unique(test_drug1$Condition)
+control_remove<-paste("c",1:15,sep="")
+
+#remove run controls (c1:c15)
+test_drug1_clean<-subset(test_drug1 ,!Condition %in% control_remove)
+unique(test_drug1_clean$Condition)
+QuantData1 <- dataProcess(test_drug1_clean,normalization = FALSE,MBimpute = FALSE) 
+length(unique(QuantData1$ProteinLevelData$Protein))
+
+#save Capmatinib data
+#write.csv(QuantData1[[2]], "Capmatinib_protien_intensities.csv",row.names=F)
+```
+
+Visualize the data 
+```{r}
+test_CDKL<-subset(QuantData1[[2]],Protein %in% c("O76039"))
+
+test_CDK4<-subset(QuantData1[[2]],Protein %in% c("P11802"))
+
+test_Q9H0U3<-subset(QuantData[[2]],Protein %in% c("Q9H0U3"))
+
+
+#define order
+order<-c("DMSO","PDPD","3nM","10nM","30nM","100nM","300nM","1000nM","3000nM","30000nM")
+
+test_CDKL<-test_CDKL[order(factor(test_CDKL$GROUP, levels = order)),]
+
+test_CDK4<-test_CDK4[order(factor(test_CDK4$GROUP, levels = order)),]
+
+#remove PDPD
+`%notin%` <- Negate(`%in%`)
+test_CDK4<-subset(test_CDK4,GROUP %notin% c("PDPD"))
+
+#visualize points for 1 protein 
+ggplot(test_CDK4,aes(x=factor(GROUP, level = order),y=LogIntensities))+geom_boxplot() + ggtitle(paste0("Test data for Protein: ", test_CDK4$Protein[1]))+xlab("Drug Concentration")+ylab("Log Intensity")
+```
+Attached simply the script. This is (very) old code, which grew over time, thus not nice (anymore). Relevant lines are 100-139. Most of the rest you could ignore. We fit by:
+try(model <- drm(response ~ dose, target, data=data, fct=modelFunction, control=drmc(method="Nelder-Mead")), silent=T)
+modelFunction default is "Log-logistic (ED50 as parameter)" for us, which worked best for the kinobeads type data (in our hands), but certainly needs optimization for other data. Nelder-Mead, if I recall correctly (its some 6 years ago), helped in avoiding issues with "outlier" curves, e.g. when the last point was off or some other things.
+
+
+
+
+Test curve fitting model code  ---
+
+Defined functions needed:
+```{r}
+#this might not be necessary ... pretty sure Log-logistic (ED50 as parameter) == LL.4()
+getModelFunctionByName <- function(modelType) {
+        models <- as.data.frame(matrix(unlist(getMeanFunctions(display=F)), 22, 2, byrow=T))
+        modelFunction <- eval(parse(text=paste(as.character(models[models$V2 == modelType,1]), "()", sep="")))
+        return(modelFunction)
+}
+
+rsquared <- function(model) {
+        meanobserved <- mean(model$origData$response)
+        sstot <- sum((model$origData$response - meanobserved)^2)
+        ssres <- sum(resid(model)^2)
+        return(1-ssres/sstot)
+}
+
+#extract model parameters  --- mc = mean correction? 
+
+extractInformation <- function(model, mc) {
+        if(class(model) == "drc") {
+                ed <- NULL
+                try(ed <- ED(model, 50, display=F), silent=T)
+                ed50 <- NA
+                stded50 <- NA
+                meanCorrection <- NA
+                kd <- NA
+                if (!is.null(ed)) {
+                        ed50 <- ed[1]
+                        stded50 <- ed[2]
+			if (is.null(model$correction)) {
+				#Do not use old correction anymore if new one is present
+	                        meanCorrection <- mean(model$origData$correction, na.rm=T)
+			} else {
+				meanCorrection <- model$correction
+			}
+                        kd <- ed50
+                        if (!is.na(meanCorrection) && meanCorrection < 1 && meanCorrection > 0) {
+                                kd <- ed50 * meanCorrection
+                        }
+                }
+                rse <- summary(model)$rseMat[1]
+                r2 <- rsquared(model)
+                bic <- BIC(model)
+                aic <- AIC(model)
+                down <- diff(model$curve[[1]](range(model$origData$dose))) < 0
+                infl <- unname(coef(model)[4])
+                top <- unname(coef(model)[3])
+                bot <- unname(coef(model)[2])
+                slope <- unname(coef(model)[1])
+                return(data.frame(target=c(as.character(unique(model$origData$target))), slope=c(slope), bottom=c(bot), top=c(top), inflection=c(infl), ed50=c(ed50), stded50=c(stded50), mc=c(meanCorrection), kd=c(kd), down=c(down), r2=c(r2), rse=c(rse), bic=c(bic), aic=c(aic), clust=c(NA)))
+        }
+        return(data.frame(target = c(as.character(unique(model$target))), slope = c(NA), bottom = c(NA), top=c(NA), inflection=c(NA), ed50=c(NA), stded50=c(NA), mc=c(NA), kd=c(NA), down=c(NA), r2=c(NA), rse=c(NA), bic=c(NA), aic=c(NA), clust=c(NA)))
+        #return(NULL)
+}
+```
+
+```{r}
+if(class(model) == "drc") {
+                ed <- NULL
+                try(ed <- ED(model, 50, display=F), silent=T)
+                ed50 <- NA
+                stded50 <- NA
+                meanCorrection <- NA
+                kd <- NA
+                if (!is.null(ed)) {
+                        ed50 <- ed[1]
+                        stded50 <- ed[2]
+			if (is.null(model$correction)) {
+				#Do not use old correction anymore if new one is present
+	                        meanCorrection <- mean(model$origData$correction, na.rm=T)
+			} else {
+				meanCorrection <- model$correction
+			}
+                        kd <- ed50
+                        if (!is.na(meanCorrection) && meanCorrection < 1 && meanCorrection > 0) {
+                                kd <- ed50 * meanCorrection
+                        }
+                }
+                rse <- summary(model)$rseMat[1]
+                r2 <- rsquared(model)
+                bic <- BIC(model)
+                aic <- AIC(model)
+                down <- diff(model$curve[[1]](range(model$origData$dose))) < 0
+                infl <- unname(coef(model)[4])
+                top <- unname(coef(model)[3])
+                bot <- unname(coef(model)[2])
+                slope <- unname(coef(model)[1])
+                return(data.frame(target=c(as.character(unique(model$origData$target))), slope=c(slope), bottom=c(bot), top=c(top), inflection=c(infl), ed50=c(ed50), stded50=c(stded50), mc=c(meanCorrection), kd=c(kd), down=c(down), r2=c(r2), rse=c(rse), bic=c(bic), aic=c(aic), clust=c(NA)))
+        }
+```
+
+
+Test1: errors about convergence failing . . . 
+
+"Error in optim(startVec, opfct, hessian = TRUE, method = optMethod, control = list(maxit = maxIt,  : 
+  non-finite value supplied by optim
+Error in drmOpt(opfct, opdfct1, startVecSc, optMethod, constrained, warnVal,  : 
+  Convergence failed"
+
+Online solution: switch inputs to vectors? 
+  
+```{r}
+#test data CDKL
+test_CDKL
+test_CDK4
+
+LogIntensities_temp<-c(test_CDKL$LogIntensities)
+dose_temp<-c(test_CDKL$GROUP)
+length(dose_temp)
+dose<-c(1:9)
+#define model function 
+modelType = "Log-logistic (ED50 as parameter)"
+response = "Normalized.LFQ.intensity."
+
+modelFunction <- getModelFunctionByName(modelType)
+
+
+drm(LogIntensities ~ GROUP, data=test_CDKL, fct=modelFunction)
+
+drm(LogIntensities ~ GROUP, data=test_CDKL, fct=modelFunction, control=drmc(method="Nelder-Mead"))
+
+doseRange <- function(data) {
+        xidxs <- grep("X", colnames(data))
+        x <- as.numeric(sub("X", "", colnames(data)[xidxs]))
+        range(x)
+}
+
+#example from stack overflow 
+fit_test <- drm(LogIntensities ~ GROUP,data=test_CDKL,  fct = LL.4())
+plot(fit_test)
+
+fit_test <- drm(LogIntensities ~ dose,data=test_CDKL,  fct = LL.4())
+plot(fit_test,ylim=c(0,19))
+```
+
+Test 2 - works if dose concentrations are inputted as a numeric vector 
+
+used LFQ intensities to fit data 
+
+```{r}
+#test 2 - works if dose concentrations are inputted as a numeric vector
+length(dose_temp)
+dose<-c(0,0,3,10,30,100,300,1000,3000)
+
+test_CDKL$LogIntensities_norm<-test_CDKL$LogIntensities/18.41819
+LogIntensities_norm_temp<-c(test_CDKL$LogIntensities_norm)
+
+
+# 2 testings --- 
+fit_test_norm <- drm(LogIntensities_norm_temp ~ dose,fct = LL.4())
+summary(fit_test_norm)
+plot(fit_test_norm,ylim=c(0,1))
+
+fit_test <- drm(LogIntensities ~ dose,data=test_Q9H0U3,  fct = LL.4())
+summary(fit_test)
+plot(fit_test,ylim=c(0,19))
+
+test_Q9H0U3$dose<-c(6,4,2,7,5,3,1,0,0)
+
+	fit_test$origData <- test_CDKL
+#	 fit_test$origData$correction <- test_CDKL[,paste(LogIntensities, "Correction", sep="")]
+
+
+
+#gives same output as LL.4()
+#drm(LogIntensities_temp ~ dose, fct=modelFunction)
+#drm(LogIntensities_temp ~ dose, fct=modelFunction, control=drmc(method="Nelder-Mead"))
+
+	test_Q9H0U3$dose<-c(1000,100,10,3000,300,30,3,1,1)
+	
+	test_Q9H0U3$dose<-log(test_Q9H0U3$dose)
+a <- dr4pl(dose = test_Q9H0U3$dose,
+             response = test_Q9H0U3$LogIntensities,
+             method.init = "logistic")
+  plot(a)
+  
+  
+ b <- dr4pl(formula = LogIntensities~dose,
+             data = test_Q9H0U3,
+             method.init = "Mead",
+             method.robust = "Tukey" )
+  plot(b)
+
+  #data.frame method
+  c <- dr4pl(data = test_Q9H0U3,
+             dose = dose,
+             response = LogIntensities)
+  plot(c)
+
+  ##compatable with ggplot
+  library(ggplot2) #load ggplot2
+  c <- dr4pl(LogIntensities~dose,
+             data = test_Q9H0U3,
+             method.optim = "CG",
+             trend = "decreasing" )
+  d <- plot(c, x.breaks = c(.00135, .0135, .135, 1.35, 13.5))
+  d + theme_grey()
+```
+
+
+
+
+
+
+```{r}
+#define model
+model<-fit_test
+
+#test code 
+if(class(model) == "drc") {
+                ed <- NULL
+                try(ed <- ED(model, 50, display=F), silent=T)
+                ed50 <- NA
+                stded50 <- NA
+                meanCorrection <- NA
+                kd <- NA
+                if (!is.null(ed)) {
+                        ed50 <- ed[1]
+                        stded50 <- ed[2]
+			if (is.null(model$correction)) {
+				#Do not use old correction anymore if new one is present
+	                        meanCorrection <- mean(model$origData$correction, na.rm=T)
+			} else {
+				meanCorrection <- model$correction
+			}
+                        kd <- ed50
+                        if (!is.na(meanCorrection) && meanCorrection < 1 && meanCorrection > 0) {
+                                kd <- ed50 * meanCorrection
+                        }
+                }
+                rse <- summary(model)$rseMat[1]
+                r2 <- rsquared(model)
+                bic <- BIC(model)
+                aic <- AIC(model)
+                down <- diff(model$curve[[1]](range(model$origData$dose))) < 0
+                infl <- unname(coef(model)[4])
+                top <- unname(coef(model)[3])
+                bot <- unname(coef(model)[2])
+                slope <- unname(coef(model)[1])
+               # return(data.frame(target=c(as.character(unique(model$origData$target))), slope=c(slope), bottom=c(bot), top=c(top), inflection=c(infl), ed50=c(ed50), stded50=c(stded50), mc=c(meanCorrection), kd=c(kd), down=c(down), r2=c(r2), rse=c(rse), bic=c(bic), aic=c(aic), clust=c(NA)))
+        }
+```
+
+
+
+
+
+Reference code: 
+```{r}
+getSingleModel <- function(odata, modelType = "Log-logistic (ED50 as parameter)", response = "Normalized.LFQ.intensity.") {
+	data <- odata
+	data$response <- data[,response]
+
+#	data <- data[data$dose < 3000 & data$dose != 100,]
+
+        modelFunction <- getModelFunctionByName(modelType)
+        data <- data[!is.na(data$response),]
+        data <- data[is.finite(data$response),]
+        model <- NULL
+	if (dim(data)[1] > 0) {
+	        try(model <- drm(response ~ dose, target, data=data, fct=modelFunction), silent=T)
+	        if (is.null(model)) {
+	                try(model <- drm(response ~ dose, target, data=data, fct=modelFunction, control=drmc(method="Nelder-Mead")), silent=T)
+        	}
+	}
+	if(is.null(model) & response == "Normalized.LFQ.intensity.") {
+		model <- getSingleModel(odata, modelType = modelType, response = "Normalized.Intensity.")
+	} else {
+	        if(is.null(model)) {
+	                model <- data
+	        } else {
+			model$origData <- data
+	                model$origData$correction <- data[,paste(response, "Correction", sep="")]
+
+			#always use normalized raw correction
+			#corCol <- paste("Normalized.Intensity.", "Correction", sep="")
+			#if(length(grep(corCol, colnames(model$origData))) > 0) {
+		        #       model$origData$correction <- data[,corCol]
+			#	if (all(is.na(unique(model$origData$correction)))) {
+			#		#does this make sense?
+			#		model$origData$correction <- 1
+			#	}
+			#} else {
+			#	model$origData$correction <- 1
+			#}
+			model$useData <- response
+	        }
+	}
+        return(model)
+}
+
+```
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Extra: 
+drug 2 
+```{r}
+test_drug2<-input_files[[2]]
+unique(test_drug2$Condition)
+control_remove<-paste("c",1:15,sep="")
+
+
+test_drug2_clean<-subset(test_drug2 ,!Condition %in% control_remove)
+unique(test_drug2_clean$Condition)
+QuantData2 <- dataProcess(test_drug2_clean,normalization = FALSE,MBimpute = FALSE) 
+length(unique(QuantData2$ProteinLevelData$Protein))
+```
+
